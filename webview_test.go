@@ -8,7 +8,7 @@ import (
 )
 
 func Example() {
-	w := New(true)
+	w := New(true, false)
 	defer w.Destroy()
 	w.SetTitle("Hello")
 	w.Bind("noop", func() string {

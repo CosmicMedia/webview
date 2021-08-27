@@ -40,7 +40,7 @@ typedef void *webview_t;
 // is embedded into the given parent window. Otherwise a new window is created.
 // Depending on the platform, a GtkWindow, NSWindow or HWND pointer can be
 // passed here.
-WEBVIEW_API webview_t webview_create(int debug, void *window);
+WEBVIEW_API webview_t webview_create(int debug, void *window, int frameless);
 
 // Destroys a webview and closes the native window.
 WEBVIEW_API void webview_destroy(webview_t w);
@@ -134,6 +134,7 @@ WEBVIEW_API void webview_return(webview_t w, const char *seq, int status,
 #include <vector>
 
 #include <cstring>
+#include <iostream>
 
 namespace webview {
 using dispatch_fn_t = std::function<void()>;
@@ -444,7 +445,7 @@ namespace webview {
 
 class gtk_webkit_engine {
 public:
-  gtk_webkit_engine(bool debug, void *window)
+  gtk_webkit_engine(bool debug, void *window, bool frameless)
       : m_window(static_cast<GtkWidget *>(window)) {
     gtk_init_check(0, NULL);
     m_window = static_cast<GtkWidget *>(window);
@@ -600,7 +601,7 @@ id operator"" _str(const char *s, std::size_t) {
 
 class cocoa_wkwebview_engine {
 public:
-  cocoa_wkwebview_engine(bool debug, void *window) {
+  cocoa_wkwebview_engine(bool debug, void *window, bool frameless) {
     // Application
     id app = ((id(*)(id, SEL))objc_msgSend)("NSApplication"_cls,
                                             "sharedApplication"_sel);
@@ -818,9 +819,13 @@ using browser_engine = cocoa_wkwebview_engine;
 #include <codecvt>
 #include <stdlib.h>
 #include <windows.h>
+#include <windowsx.h>
+#include <Uxtheme.h>
+#include <dwmapi.h>
 
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "Shlwapi.lib")
+#pragma comment(lib, "dwmapi.lib")
 
 // EdgeHTML headers and libs
 #include <objbase.h>
@@ -1066,9 +1071,12 @@ private:
   };
 };
 
+#define  BORDER_WIDTH  5
+
 class win32_edge_engine {
 public:
-  win32_edge_engine(bool debug, void *window) {
+  win32_edge_engine(bool debug, void *window, bool frameless) {
+    this->frameless = frameless;
     if (window == nullptr) {
       HINSTANCE hInstance = GetModuleHandle(nullptr);
       HICON icon = (HICON)LoadImage(
@@ -1082,6 +1090,7 @@ public:
       wc.lpszClassName = "webview";
       wc.hIcon = icon;
       wc.hIconSm = icon;
+      wc.style = CS_HREDRAW | CS_VREDRAW;
       wc.lpfnWndProc =
           (WNDPROC)(+[](HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) -> int {
             auto w = (win32_edge_engine *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
@@ -1095,6 +1104,53 @@ public:
             case WM_DESTROY:
               w->terminate();
               break;
+            case WM_NCCALCSIZE: {
+              
+            } break;
+            case WM_NCHITTEST: {
+              RECT winrect;
+              GetWindowRect(hwnd, &winrect);
+              long x = GET_X_LPARAM(lp);
+              long y = GET_Y_LPARAM(lp);
+
+              // BOTTOM LEFT
+              if (x >= winrect.left && x < winrect.left + BORDER_WIDTH &&
+                y < winrect.bottom && y >= winrect.bottom - BORDER_WIDTH) {
+                return HTBOTTOMLEFT;
+              }
+              // BOTTOM RIGHT
+              if (x < winrect.right && x >= winrect.right - BORDER_WIDTH &&
+                y < winrect.bottom && y >= winrect.bottom - BORDER_WIDTH) {
+                return HTBOTTOMRIGHT;
+              }
+              // TOP LEFT
+              if (x >= winrect.left && x < winrect.left + BORDER_WIDTH &&
+                y >= winrect.top && y < winrect.top + BORDER_WIDTH) {
+                return HTTOPLEFT;
+              }
+              // TOP RIGHT
+              if (x < winrect.right && x >= winrect.right - BORDER_WIDTH &&
+                y >= winrect.top && y < winrect.top + BORDER_WIDTH) {
+                return HTTOPRIGHT;
+              }
+              // LEFT
+              if (x >= winrect.left && x < winrect.left + BORDER_WIDTH) {
+                return HTLEFT;
+              }
+              // RIGHT
+              if (x < winrect.right && x >= winrect.right - BORDER_WIDTH) {
+                return HTRIGHT;
+              }
+              // BOTTOM
+              if (y < winrect.bottom && y >= winrect.bottom - BORDER_WIDTH) {
+                return HTBOTTOM;
+              }
+              // TOP
+              if (y >= winrect.top && y < winrect.top + BORDER_WIDTH) {
+                return HTTOP;
+              }
+              return HTCAPTION;
+            } break;
             case WM_GETMINMAXINFO: {
               auto lpmmi = (LPMINMAXINFO)lp;
               if (w == nullptr) {
@@ -1117,6 +1173,18 @@ public:
       m_window = CreateWindow("webview", "", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
                               CW_USEDEFAULT, 640, 480, nullptr, nullptr,
                               GetModuleHandle(nullptr), nullptr);
+
+      if (this->frameless) {
+        SetLayeredWindowAttributes(m_window, RGB(255, 0, 255), 0, LWA_COLORKEY);
+
+        LONG style = GetWindowLong(m_window, GWL_STYLE);
+        SetWindowLong(m_window, GWL_STYLE, style & (WS_CAPTION | WS_THICKFRAME | WS_MINIMIZE | WS_MAXIMIZE | WS_SYSMENU));
+
+        MARGINS margins = {1,1,1,1};
+
+        DwmExtendFrameIntoClientArea(m_window, &margins);
+      }
+      
       SetWindowLongPtr(m_window, GWLP_USERDATA, (LONG_PTR)this);
     } else {
       m_window = *(static_cast<HWND *>(window));
@@ -1136,6 +1204,10 @@ public:
     }
 
     m_browser->resize(m_window);
+  }
+
+  bool get_frameless () {
+    return this->frameless;
   }
 
   void run() {
@@ -1204,6 +1276,7 @@ private:
   HWND m_window;
   POINT m_minsz = POINT{0, 0};
   POINT m_maxsz = POINT{0, 0};
+  bool frameless = false;
   DWORD m_main_thread = GetCurrentThreadId();
   std::unique_ptr<webview::browser> m_browser =
       std::make_unique<webview::edge_chromium>();
@@ -1218,8 +1291,8 @@ namespace webview {
 
 class webview : public browser_engine {
 public:
-  webview(bool debug = false, void *wnd = nullptr)
-      : browser_engine(debug, wnd) {}
+  webview(bool debug = false, void *wnd = nullptr, bool frameless = false)
+      : browser_engine(debug, wnd, frameless) {}
 
   void navigate(const std::string url) {
     if (url == "") {
@@ -1301,8 +1374,8 @@ private:
 };
 } // namespace webview
 
-WEBVIEW_API webview_t webview_create(int debug, void *wnd) {
-  return new webview::webview(debug, wnd);
+WEBVIEW_API webview_t webview_create(int debug, void *wnd, int frameless) {
+  return new webview::webview(debug, wnd, frameless);
 }
 
 WEBVIEW_API void webview_destroy(webview_t w) {

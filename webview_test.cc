@@ -31,7 +31,7 @@ static void cb_terminate(webview_t w, void *arg) {
 }
 static void test_c_api() {
   webview_t w;
-  w = webview_create(false, nullptr);
+  w = webview_create(false, nullptr, false);
   webview_set_size(w, 480, 320, 0);
   webview_set_title(w, "Test");
   webview_navigate(w, "https://github.com/zserge/webview");
@@ -46,7 +46,7 @@ static void test_c_api() {
 // =================================================================
 struct test_webview : webview::browser_engine {
   using cb_t = std::function<void(test_webview *, int, const std::string)>;
-  test_webview(cb_t cb) : webview::browser_engine(true, nullptr), m_cb(cb) {}
+  test_webview(cb_t cb) : webview::browser_engine(true, nullptr, false), m_cb(cb) {}
   void on_message(const std::string msg) override { m_cb(this, i++, msg); }
   int i = 0;
   cb_t m_cb;
